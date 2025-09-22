@@ -1,0 +1,65 @@
+# Use a multi-stage build to separate build and runtime environments.
+# This minimizes the final image size by excluding build tools and intermediate artifacts.
+
+# Stage 1: Builder stage using Maven to compile the Spring Boot application.
+# We use a specific Maven image tag for reproducibility and to avoid unexpected changes.
+FROM maven:3.9.9-eclipse-temurin-21 AS builder
+
+# Set the working directory for the build.
+WORKDIR /app
+
+# Copy only the pom.xml first to leverage Docker's build cache.
+# This way, dependencies are downloaded and cached separately from the source code.
+# If pom.xml doesn't change, this layer is reused, speeding up builds.
+COPY pom.xml .
+
+# Download dependencies to cache them. Use --no-transfer-progress for cleaner logs.
+RUN mvn dependency:go-offline --no-transfer-progress
+
+# Now copy the entire source code. This is placed after dependencies to maximize cache hits,
+# as source code changes more frequently than dependencies.
+COPY src ./src
+
+# Build the application, skipping tests for production builds (can be enabled if needed).
+# The resulting JAR will be in /app/target.
+RUN mvn clean package -DskipTests --no-transfer-progress
+
+# Stage 2: Runtime stage using a minimal base image for production.
+# We use eclipse-temurin:21-jre-alpine for a small, secure Java runtime (Alpine is lightweight).
+# This reduces image size significantly compared to full JDK images.
+FROM eclipse-temurin:21-jre-alpine
+
+# Add metadata labels for better maintainability and documentation.
+# These don't add layers but provide useful info (e.g., for scanning tools).
+LABEL maintainer="sh@example.com" \
+      description="Production Dockerfile for Spring Boot App" \
+      version="1.0.0"
+
+# Set the working directory for the runtime.
+WORKDIR /app
+
+# Create a non-root user and group to run the app.
+# This enhances security by avoiding running as root, reducing potential damage from vulnerabilities.
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
+# Copy the compiled JAR from the builder stage.
+# Use --from=builder to reference the previous stage.
+# Only copy the necessary artifact to keep the image small.
+COPY --from=builder /app/target/*.jar app.jar
+
+# Change ownership of the JAR to the non-root user.
+# This is done in a single RUN to minimize layers.
+RUN chown appuser:appgroup app.jar
+
+# Switch to the non-root user for running the application.
+USER appuser:appgroup
+
+# Expose the port the Spring Boot app runs on (default 8080).
+EXPOSE 8080
+
+# Set the entrypoint to run the JAR.
+# Use exec form for proper signal handling (e.g., for graceful shutdown).
+# This is the command that runs when the container starts.
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+
