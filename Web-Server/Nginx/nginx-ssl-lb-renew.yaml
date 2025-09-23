@@ -1,0 +1,129 @@
+---
+- name: Setup Nginx Reverse Proxy with SSL & Load Balancing
+  hosts: nginx_proxy
+  become: yes
+  vars:
+    domain_name: example.com
+    backend_servers:
+      - 192.168.1.101:3000
+      - 192.168.1.102:3000
+    email: admin@example.com  # Email for Let's Encrypt registration
+
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install required packages (nginx, certbot)
+      apt:
+        name:
+          - nginx
+          - certbot
+          - python3-certbot-nginx
+        state: present
+
+    - name: Ensure nginx service is enabled and started
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+
+    - name: Create Nginx upstream config snippet
+      copy:
+        dest: /etc/nginx/conf.d/upstream.conf
+        content: |
+          upstream backend_servers {
+          {% for server in backend_servers %}
+              server {{ server }};
+          {% endfor %}
+          }
+
+    - name: Create Nginx site config for reverse proxy with SSL
+      copy:
+        dest: /etc/nginx/sites-available/reverse-proxy.conf
+        content: |
+          server {
+              listen 80;
+              server_name {{ domain_name }} www.{{ domain_name }};
+              location /.well-known/acme-challenge/ {
+                  root /var/www/certbot;
+              }
+              location / {
+                  return 301 https://$host$request_uri;
+              }
+          }
+
+          server {
+              listen 443 ssl;
+              server_name {{ domain_name }} www.{{ domain_name }};
+
+              ssl_certificate /etc/letsencrypt/live/{{ domain_name }}/fullchain.pem;
+              ssl_certificate_key /etc/letsencrypt/live/{{ domain_name }}/privkey.pem;
+              ssl_protocols TLSv1.2 TLSv1.3;
+              ssl_ciphers HIGH:!aNULL:!MD5;
+
+              location / {
+                  proxy_pass http://backend_servers;
+                  proxy_http_version 1.1;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+              }
+          }
+
+    - name: Enable site by linking to sites-enabled
+      file:
+        src: /etc/nginx/sites-available/reverse-proxy.conf
+        dest: /etc/nginx/sites-enabled/reverse-proxy.conf
+        state: link
+        force: yes
+
+    - name: Remove default nginx site if exists
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Create webroot directory for certbot challenge
+      file:
+        path: /var/www/certbot
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      register: nginx_test
+      changed_when: false
+      failed_when: nginx_test.rc != 0
+
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded
+
+    - name: Obtain Let's Encrypt SSL certificates
+      command: >
+        certbot certonly --webroot
+        --webroot-path /var/www/certbot
+        --agree-tos --email {{ email }}
+        --no-eff-email
+        -d {{ domain_name }} -d www.{{ domain_name }}
+        --non-interactive
+      register: certbot_result
+      changed_when: "'Congratulations' in certbot_result.stdout or certbot_result.rc == 0"
+
+    - name: Reload Nginx after certbot
+      service:
+        name: nginx
+        state: reloaded
+      when: certbot_result.changed
+
+    - name: Setup automatic certificate renewal cron job (twice daily)
+      cron:
+        name: "Renew Let's Encrypt certificates"
+        job: "certbot renew --quiet --deploy-hook 'systemctl reload nginx'"
+        minute: "0"
+        hour: "0,12"
+
