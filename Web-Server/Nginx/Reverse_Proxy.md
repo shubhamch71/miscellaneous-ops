@@ -41,13 +41,16 @@ sudo systemctl start nginx
 ```
 
 **1.2 SSL Certificate Setup**
-**Option A: Use Let's Encrypt (Recommended)**
+
+Option A: Use Let's Encrypt (Recommended)
+
 ```bash 
 sudo apt install certbot python3-certbot-nginx -y
 sudo certbot --nginx -d example.com -d www.example.com
 ```
 
-**Option B: Self-Signed Certificate (For Testing)**
+Option B: Self-Signed Certificate (For Testing)
+
 ```bash
 sudo mkdir -p /etc/ssl/private
 sudo openssl req -x509 -nodes -days 365 \
