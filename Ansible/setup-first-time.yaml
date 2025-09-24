@@ -1,0 +1,82 @@
+# Below is the playbook for setting up ansible for fleet of servers (both linux and windows)
+---
+- name: SSH Setup and WinRM Configuration
+  hosts: all
+  become: true
+  vars:
+    ansible_ssh_private_key_file: "~/.ssh/ansible_key"
+    ansible_user: ansible
+    ansible_winrm_transport: ssl   # Using SSL for secure communication over HTTPS
+    ansible_winrm_server_cert_validation: ignore  # Modify based on your security needs
+    ansible_winrm_port: 5986  # Port 5986 for HTTPS
+
+  tasks:
+
+    # Step 1: For Linux Hosts - Generate SSH Key Pair (if not already done)
+    - name: Generate SSH key pair (if not present) for Linux hosts
+      command: "ssh-keygen -t ed25519 -f ~/.ssh/ansible_key -N ''"
+      when: ansible_facts['os_family'] != 'Windows'
+      delegate_to: localhost
+      register: ssh_keygen_result
+      ignore_errors: yes  # Ignore error if the key already exists
+
+    # Step 2: For Linux Hosts - Copy public key to the managed node
+    - name: Copy public key to the managed node (Linux)
+      authorized_key:
+        user: "{{ ansible_user }}"
+        key: "{{ lookup('file', ansible_ssh_private_key_file + '.pub') }}"
+      when: ansible_facts['os_family'] != 'Windows'
+
+    # Step 3: For Linux Hosts - Disable Password Authentication and Enable PubkeyAuthentication in sshd_config
+    - name: Ensure SSH config is secure (Linux)
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?(PermitRootLogin|PasswordAuthentication|PubkeyAuthentication)"
+        line: |
+          PermitRootLogin no
+          PasswordAuthentication no
+          PubkeyAuthentication yes
+      when: ansible_facts['os_family'] != 'Windows'
+      notify:
+        - Restart SSH
+
+    # Step 4: For Windows Hosts - Install and configure WinRM
+    - name: Install WinRM listener on Windows host (HTTPS)
+      win_service:
+        name: winrm
+        start_mode: auto
+        state: started
+      when: ansible_facts['os_family'] == 'Windows'
+
+    - name: Configure WinRM for HTTPS (Windows)
+      win_command: |
+        winrm quickconfig -q
+        winrm create winrm/config/Listener?Address=*+Transport=HTTPS @{Hostname="*" ; CertificateThumbprint="your_certificate_thumbprint"}
+      when: ansible_facts['os_family'] == 'Windows'
+
+    - name: Allow Windows firewall rule for WinRM over HTTPS (Port 5986)
+      win_firewall_rule:
+        name: WinRM (HTTPS)
+        enable: yes
+        localport: 5986
+        protocol: TCP
+        direction: in
+      when: ansible_facts['os_family'] == 'Windows'
+
+    - name: Enable basic authentication for WinRM (Windows)
+      win_command: winrm set winrm/config/service/Auth '@{Basic="true"}'
+      when: ansible_facts['os_family'] == 'Windows'
+
+    - name: Allow basic authentication for WinRM
+      win_command: winrm set winrm/config/service/Auth '@{Basic="true"}'
+      when: ansible_facts['os_family'] == 'Windows'
+
+    # Step 5: Restart SSH service (Linux)
+  handlers:
+    - name: Restart SSH
+      systemd:
+        name: sshd
+        state: restarted
+        enabled: yes
+
+
