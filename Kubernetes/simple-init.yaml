@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: example-pod
+spec:
+  initContainers:
+  - name: init-myservice
+    image: busybox
+    command: ['sh', '-c', 'echo Initializing... && sleep 5']
+  containers:
+  - name: myapp-container
+    image: nginx
+    ports:
+    - containerPort: 80

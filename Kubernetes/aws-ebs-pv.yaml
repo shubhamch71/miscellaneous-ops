@@ -1,0 +1,40 @@
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: standard
+provisioner: kubernetes.io/aws-ebs       # AWS EBS provisioner (change per cloud)
+parameters:
+  type: gp2                              # EBS volume type
+reclaimPolicy: Delete                    # Delete PV on PVC deletion
+volumeBindingMode: Immediate             # Bind volume immediately
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: my-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce                     # Single node read-write
+  resources:
+    requests:
+      storage: 5Gi                      # Request 5Gi storage
+  storageClassName: standard            # Match the StorageClass above
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app-using-pvc
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+      volumeMounts:
+        - mountPath: /usr/share/nginx/html
+          name: storage
+  volumes:
+    - name: storage
+      persistentVolumeClaim:
+        claimName: my-pvc

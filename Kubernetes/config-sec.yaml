@@ -1,0 +1,70 @@
+---
+# 1. Create a ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-config
+data:
+  APP_ENV: production
+  LOG_LEVEL: debug
+
+---
+# 2. Create a Secret (base64 encoded)
+apiVersion: v1
+kind: Secret
+metadata:
+  name: demo-secret
+type: Opaque
+data:
+  username: YWRtaW4=       # "admin"
+  password: c2VjcmV0MTIz    # "secret123"
+
+---
+# 3. Pod that uses both ConfigMap and Secret
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-pod
+spec:
+  containers:
+    - name: app
+      image: busybox
+      command:
+        - sh
+        - -c
+        - |
+          echo "--- ENV VARIABLES ---";
+          echo "APP_ENV=$APP_ENV";
+          echo "LOG_LEVEL=$LOG_LEVEL";
+          echo "DB_USER=$DB_USER";
+          echo "DB_PASS=$DB_PASS";
+          echo "--- FILES ---";
+          cat /etc/config/APP_ENV;
+          cat /etc/secret/username;
+          sleep 3600;
+      envFrom:
+        - configMapRef:
+            name: demo-config
+      env:
+        - name: DB_USER
+          valueFrom:
+            secretKeyRef:
+              name: demo-secret
+              key: username
+        - name: DB_PASS
+          valueFrom:
+            secretKeyRef:
+              name: demo-secret
+              key: password
+      volumeMounts:
+        - name: config-vol
+          mountPath: /etc/config
+        - name: secret-vol
+          mountPath: /etc/secret
+  volumes:
+    - name: config-vol
+      configMap:
+        name: demo-config
+    - name: secret-vol
+      secret:
+        secretName: demo-secret
